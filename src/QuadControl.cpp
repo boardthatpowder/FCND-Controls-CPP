@@ -69,11 +69,28 @@ VehicleCommand QuadControl::GenerateMotorCommands(float collThrustCmd, V3F momen
   // You'll need the arm length parameter L, and the drag/thrust ratio kappa
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
+    
+    // L=length of arm from centre of quadrocopter to motor, but we need rotor to rotor distance.
+    // Therefore assuming each arm is at right angles to each other:
+    float l = L / sqrtf(2.f);
 
-  cmd.desiredThrustsN[0] = mass * 9.81f / 4.f; // front left
-  cmd.desiredThrustsN[1] = mass * 9.81f / 4.f; // front right
-  cmd.desiredThrustsN[2] = mass * 9.81f / 4.f; // rear left
-  cmd.desiredThrustsN[3] = mass * 9.81f / 4.f; // rear right
+    // inspired by `1.1 Setting the propeller angular velocities (Drone)` of `Lesson 4 - 3D Drone-Full-Notebook.ipynb`
+
+    float cBar = collThrustCmd;              // no k_f available?
+    float pBar = momentCmd.x / l;            // no k_f available?
+    float qBar = momentCmd.y / l;            // no k_f available?
+    float rBar = -momentCmd.z / kappa;       // no k_m available, use kappa instead?
+    
+    float omega1 = (cBar + pBar + qBar + rBar) / 4.f;
+    float omega2 = (cBar - pBar + qBar - rBar) / 4.f;
+    float omega3 = (cBar - pBar - qBar + rBar) / 4.f;
+    float omega4 = (cBar + pBar - qBar - rBar) / 4.f;
+
+    // note: tried using `CONSTRAIN(omega1, minMotorThrust, maxMotorThrust)` but fails
+    cmd.desiredThrustsN[0] = omega1;   // front left
+    cmd.desiredThrustsN[1] = omega2;   // front right
+    cmd.desiredThrustsN[2] = omega4;   // rear left (python code omega_4 is rear left)
+    cmd.desiredThrustsN[3] = omega3;   // rear right (python code omega_3 is rear right)
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
@@ -98,6 +115,11 @@ V3F QuadControl::BodyRateControl(V3F pqrCmd, V3F pqr)
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
 
+    // inpsired from `body_rate_controller()` method of the python `controller.py`:
+    V3F moi = V3F(Ixx, Iyy, Izz);
+    V3F rateError = pqrCmd - pqr;
+    momentCmd = moi * (kpPQR * rateError);
+    
   
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
@@ -128,8 +150,27 @@ V3F QuadControl::RollPitchControl(V3F accelCmd, Quaternion<float> attitude, floa
   Mat3x3F R = attitude.RotationMatrix_IwrtB();
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
-
-
+    
+    // inpsired from `roll_pitch_controller()` method of the python `controller.py`:
+    
+    float cd = collThrustCmd / mass;
+    pqrCmd.z=0.f;
+    
+    if (collThrustCmd>0.0) {
+        float targetR13 = -CONSTRAIN(accelCmd.x/cd, -maxTiltAngle, maxTiltAngle);
+        float targetR23 = -CONSTRAIN(accelCmd.y/cd, -maxTiltAngle, maxTiltAngle);
+        
+        pqrCmd.x = (1/R(2,2)) * \
+                    (-R(1, 0) * kpBank * (R(0, 2)-targetR13) + \
+                     R(0, 0) * kpBank * (R(1, 2)-targetR23));
+        
+        pqrCmd.y = (1/R(2,2)) * \
+                    (-R(1, 1) * kpBank * (R(0, 2)-targetR13) + \
+                     R(0, 1) * kpBank * (R(1, 2)-targetR23));
+    } else {
+        pqrCmd.x=0.f;
+        pqrCmd.y=0.f;
+    }
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
@@ -160,9 +201,31 @@ float QuadControl::AltitudeControl(float posZCmd, float velZCmd, float posZ, flo
   float thrust = 0;
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
+    
+    /*
+        inpsired from `altitude_controller()` method of `Lesson 4 - 3D Drone-Full-Notebook.ipynb`,
+        but with addition of capturing error over time.
+     */
+    
+    velZCmd = CONSTRAIN(velZCmd, -maxAscentRate, maxDescentRate );
+    
+    float bz = R(2,2);
 
+    float zErr = posZCmd - posZ;
+    float pTerm = kpPosZ * zErr;
 
+    integratedAltitudeError += zErr * dt;
+    float iTerm = KiPosZ * integratedAltitudeError;
 
+    float zDotErr = velZCmd-velZ;
+    float dTerm = kpVelZ * zDotErr;
+
+    float uBar = pTerm + iTerm + dTerm + accelZCmd;
+
+    thrust = mass * (CONST_GRAVITY - uBar) / bz;
+    thrust = CONSTRAIN(thrust, minMotorThrust * 4.f, maxMotorThrust * 4.f);
+
+    
   /////////////////////////////// END STUDENT CODE ////////////////////////////
   
   return thrust;
@@ -198,7 +261,18 @@ V3F QuadControl::LateralPositionControl(V3F posCmd, V3F velCmd, V3F pos, V3F vel
   V3F accelCmd = accelCmdFF;
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
+    
+    // originally inpsired from `lateral_position_control()` method of the python `controller.py`,
+    // but morphed quite a bit trying to get to work
+    
+    velCmd += kpPosXY * (posCmd - pos);
+    velCmd.x = CONSTRAIN(velCmd.x, -maxSpeedXY, maxSpeedXY);
+    velCmd.y = CONSTRAIN(velCmd.y, -maxSpeedXY, maxSpeedXY);
 
+    accelCmd += kpVelXY*(velCmd-vel) ;
+    accelCmd.x = CONSTRAIN(accelCmd.x, -maxAccelXY, maxAccelXY);
+    accelCmd.y = CONSTRAIN(accelCmd.y, -maxAccelXY, maxAccelXY);
+    
   
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////

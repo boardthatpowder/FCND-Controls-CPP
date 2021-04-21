@@ -26,3 +26,9 @@ bld/
 
 # manual cmake build ignores
 build/
+
+# mac
+project.xcworkspace
+xcshareddata
+xcuserdata
+.DS_Store
